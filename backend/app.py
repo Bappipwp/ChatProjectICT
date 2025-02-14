@@ -1,15 +1,26 @@
+import os
+import secrets
 from flask import Flask
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 
+# Generate a secure secret key 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://chatuser:securepassword@localhost/chatdb'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False #could remove
-CORS(app)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', secrets.token_urlsafe(64))  # For general Flask usage
+app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'supersecretkey')  # For JWT usage
 
+# Configuration from environment variables
+app.config['FLASK_APP'] = os.getenv('FLASK_APP', 'app.py')
+app.config['FLASK_ENV'] = os.getenv('FLASK_ENV', 'production')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+#cors and db
+CORS(app)
 db =SQLAlchemy(app)
+
 #user
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -18,9 +29,8 @@ class User(db.Model):
 
     def __repr__(self):
         return f'<User {self.username}>'
-
+    
 #messages
-
 class Message(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     sender = db.Column(db.String(100), nullable=False)
@@ -33,12 +43,7 @@ class Message(db.Model):
 #databse
 with app.app_context():
     db.create_all()
-
-if __name__ == "__main__":
-    app.run(debug=True)
-
-#Config secret key
-app.config["JWT_SECRET_KEY"] = "supersecretkey" #Change this later
+# Initialize JWT
 jwt = JWTManager(app)
 
 @app.route("/")
