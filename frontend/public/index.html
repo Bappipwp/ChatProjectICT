@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quick Chat</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+    #login { margin-bottom: 20px; }
+    #chat { display: none; }
+    #messages { height: 300px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
+    #room-list { float: right; width: 200px; }
+    #user-list { float: right; width: 200px; margin-left: 20px; }
+    .message { margin-bottom: 10px; }
+    .message .sender { font-weight: bold; }
+    .encrypted { color: #666; font-style: italic; }
+  </style>
+</head>
+<body>
+  <h1>Quick Chat</h1>
+  
+  <div id="login">
+    <h2>Quick Login</h2>
+    <input type="text" id="username" placeholder="Enter a username">
+    <button id="login-btn">Start Chatting</button>
+  </div>
+  
+  <div id="chat">
+    <div id="room-list">
+      <h3>Rooms</h3>
+      <ul id="rooms"></ul>
+      <input type="text" id="new-room" placeholder="New room name">
+      <button id="create-room">Create</button>
+    </div>
+    
+    <div id="user-list">
+      <h3>Users</h3>
+      <ul id="users"></ul>
+    </div>
+    
+    <div id="chat-area">
+      <h2 id="current-room">General</h2>
+      <div id="messages"></div>
+      <textarea id="message-input" placeholder="Type your message"></textarea>
+      <button id="send-btn">Send</button>
+      <div id="encryption-status">Messages are end-to-end encrypted</div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsencrypt/3.3.2/jsencrypt.min.js"></script>
+  <script>
+    const socket = io();
+    let currentUser = null;
+    let currentRoom = 'general';
+    let privateKey = null;
+    let publicKey = null;
+    let encrypt = new JSEncrypt();
+    let usersInRoom = {};
+    
+    // DOM elements
+    const loginSection = document.getElementById('login');
+    const chatSection = document.getElementById('chat');
+    const usernameInput = document.getElementById('username');
+    const loginBtn = document.getElementById('login-btn');
+    const roomsList = document.getElementById('rooms');
+    const usersList = document.getElementById('users');
+    const messagesDiv = document.getElementById('messages');
+    const messageInput = document.getElementById('message-input');
+    const sendBtn = document.getElementById('send-btn');
+    const newRoomInput = document.getElementById('new-room');
+    const createRoomBtn = document.getElementById('create-room');
+    const currentRoomTitle = document.getElementById('current-room');
+    
+    // Quick login
+    loginBtn.addEventListener('click', () => {
+      const username = usernameInput.value.trim();
+      if (username) {
+        socket.emit('quickLogin', username);
+      }
+    });
+    
+    // Handle login success
+    socket.on('loggedIn', (data) => {
+      currentUser = data.username;
+      privateKey = data.privateKey;
+      encrypt.setPrivateKey(privateKey);
+      
+      // Show chat interface
+      loginSection.style.display = 'none';
+      chatSection.style.display = 'block';
+      
+      // Populate rooms list
+      data.rooms.forEach(room => {
+        addRoomToList(room);
+      });
+      
+      // Join default room
+      joinRoom('general');
+    });
+    
+    // Join room
+    function joinRoom(roomName) {
+      currentRoom = roomName;
+      currentRoomTitle.textContent = roomName;
+      socket.emit('joinRoom', roomName);
+    }
+    
+    // Add room to list
+    function addRoomToList(roomName) {
+      const li = document.createElement('li');
+      const a = document.createElement('a');
+      a.href = '#';
+      a.textContent = roomName;
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        joinRoom(roomName);
+      });
+      li.appendChild(a);
+      roomsList.appendChild(li);
+    }
+    
+    // Create new room
+    createRoomBtn.addEventListener('click', () => {
+      const roomName = newRoomInput.value.trim();
+      if (roomName && !roomsList.querySelector(`li a[href="#"]`)) {
+        addRoomToList(roomName);
+        newRoomInput.value = '';
+      }
+    });
+    
+    // Send message
+    sendBtn.addEventListener('click', sendMessage);
+    messageInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        sendMessage();
+      }
+    });
+    
+    function sendMessage() {
+      const message = messageInput.value.trim();
+      if (!message) return;
+      
+      // Encrypt the message for all users in the room
+      Object.values(usersInRoom).forEach(user => {
+        if (user.publicKey !== publicKey) { // Don't encrypt for ourselves
+          const userEncrypt = new JSEncrypt();
+          userEncrypt.setPublicKey(user.publicKey);
+          const encrypted = userEncrypt.encrypt(message);
+          
+          if (encrypted) {
+            socket.emit('encryptedMessage', {
+              room: currentRoom,
+              encryptedMessage: encrypted,
+              to: user.publicKey
+            });
+          }
+        }
+      });
+      
+      // Add our own message (not encrypted)
+      addMessage({
+        from: currentUser,
+        message: message,
+        isEncrypted: false
+      });
+      
+      messageInput.value = '';
+    }
+    
+    // Add message to UI
+    function addMessage(msg) {
+      const messageDiv = document.createElement('div');
+      messageDiv.className = 'message';
+      
+      const senderSpan = document.createElement('span');
+      senderSpan.className = 'sender';
+      senderSpan.textContent = msg.from + ': ';
+      messageDiv.appendChild(senderSpan);
+      
+      const contentSpan = document.createElement('span');
+      contentSpan.className = msg.isEncrypted ? 'encrypted' : '';
+      contentSpan.textContent = msg.isEncrypted ? '[Encrypted message]' : msg.message;
+      messageDiv.appendChild(contentSpan);
+      
+      messagesDiv.appendChild(messageDiv);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+    
+    // Handle room info
+    socket.on('roomInfo', (data) => {
+      currentRoomTitle.textContent = data.name;
+      usersInRoom = {};
+      
+      // Update user list
+      usersList.innerHTML = '';
+      data.users.forEach(user => {
+        usersInRoom[user.publicKey] = user;
+        const li = document.createElement('li');
+        li.textContent = user.username;
+        usersList.appendChild(li);
+      });
+      
+      // Show message history
+      messagesDiv.innerHTML = '';
+      data.messages.forEach(msg => {
+        if (msg.to && msg.to !== publicKey) return; // Skip messages not for us
+        
+        let decrypted = '[Cannot decrypt]';
+        if (msg.to === publicKey || msg.to === undefined) {
+          try {
+            decrypted = encrypt.decrypt(msg.encryptedMessage) || '[Cannot decrypt]';
+          } catch (e) {
+            console.error('Decryption error:', e);
+          }
+        }
+        
+        addMessage({
+          from: msg.from,
+          message: decrypted,
+          isEncrypted: decrypted === '[Cannot decrypt]'
+        });
+      });
+    });
+    
+    // Handle new encrypted message
+    socket.on('newEncryptedMessage', (msg) => {
+      if (msg.from === currentUser) return; // Skip our own messages
+      
+      let decrypted = '[Cannot decrypt]';
+      try {
+        decrypted = encrypt.decrypt(msg.encryptedMessage) || '[Cannot decrypt]';
+      } catch (e) {
+        console.error('Decryption error:', e);
+      }
+      
+      addMessage({
+        from: msg.from,
+        message: decrypted,
+        isEncrypted: decrypted === '[Cannot decrypt]'
+      });
+    });
+    
+    // Handle user joined
+    socket.on('userJoined', (user) => {
+      usersInRoom[user.publicKey] = user;
+      const li = document.createElement('li');
+      li.textContent = user.username;
+      usersList.appendChild(li);
+    });
+    
+    // Handle user left
+    socket.on('userLeft', (username) => {
+      const userEntry = Object.entries(usersInRoom).find(([_, u]) => u.username === username);
+      if (userEntry) {
+        delete usersInRoom[userEntry[0]];
+        const items = usersList.querySelectorAll('li');
+        items.forEach(item => {
+          if (item.textContent === username) {
+            item.remove();
+          }
+        });
+      }
+    });
+  </script>
+</body>
+</html>
